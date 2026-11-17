@@ -7,6 +7,8 @@ use crate::{file_server, matches_pattern, reverse_proxy};
 use bytes::BytesMut;
 use http::{Response, StatusCode};
 use log::debug;
+#[cfg(debug_assertions)]
+use log::error;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

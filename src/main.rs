@@ -3,6 +3,8 @@ use crate::error::CbltError;
 use crate::server::{Server, ServerWorker};
 use clap::{Parser, ValueEnum};
 use log::{error, info};
+#[cfg(debug_assertions)]
+use log::debug;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::path::Path;

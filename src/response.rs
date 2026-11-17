@@ -3,6 +3,8 @@ use async_compression::tokio::write::GzipEncoder;
 use bytes::BytesMut;
 use http::{Request, Response, StatusCode};
 use log::info;
+#[cfg(debug_assertions)]
+use log::debug;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::pin;

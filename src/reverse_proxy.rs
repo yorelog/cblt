@@ -2,7 +2,7 @@ use crate::{matches_pattern, CbltError};
 use bytes::BytesMut;
 use http::{Request, StatusCode};
 #[cfg(debug_assertions)]
-use log::error;
+use log::{debug, error};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(feature = "trace")]
 use tracing::instrument;
