@@ -6,6 +6,7 @@ use http::{Request, Response, StatusCode};
 #[cfg(debug_assertions)]
 use log::debug;
 use log::info;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::pin;
 use tokio::fs::File;
@@ -194,7 +195,11 @@ fn encoding_quality(parameters: &str) -> Option<f32> {
 }
 
 #[cfg_attr(feature = "trace", instrument(level = "trace", skip_all))]
-pub fn log_request_response(request: &Request<BytesMut>, status_code: StatusCode) {
+pub fn log_request_response(
+    request: &Request<BytesMut>,
+    status_code: StatusCode,
+    remote_addr: SocketAddr,
+) {
     let method = &request.method();
     let uri = request.uri();
     let headers = request.headers();
@@ -204,11 +209,12 @@ pub fn log_request_response(request: &Request<BytesMut>, status_code: StatusCode
         .map_or("-", |v| v.to_str().unwrap_or("-"));
 
     info!(
-        "Request: {} {} {} {}",
+        "Request: {} {} {} {} remote_addr={}",
         method,
         uri,
         host_header,
-        status_code.as_u16()
+        status_code.as_u16(),
+        remote_addr
     );
 }
 

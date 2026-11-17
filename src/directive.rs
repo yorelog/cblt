@@ -40,6 +40,7 @@ where
             Err(err)
         }
         Ok(request) => {
+            let log_request = |status_code| log_request_response(&request, status_code, addr);
             let host = match request.headers().get("Host") {
                 Some(h) => h.to_str().unwrap_or(""),
                 None => "",
@@ -90,7 +91,7 @@ where
                                 .await;
                         match ret {
                             Ok(_) => {
-                                log_request_response(&request, StatusCode::OK);
+                                log_request(StatusCode::OK);
                                 return Ok(());
                             }
                             Err(error) => match error {
@@ -101,24 +102,18 @@ where
                                     let response = error_response(status_code);
                                     match send_response(socket, response?).await {
                                         Ok(()) => {
-                                            log_request_response(&request, status_code);
+                                            log_request(status_code);
                                             return Ok(());
                                         }
                                         Err(err) => {
-                                            log_request_response(
-                                                &request,
-                                                StatusCode::INTERNAL_SERVER_ERROR,
-                                            );
+                                            log_request(StatusCode::INTERNAL_SERVER_ERROR);
                                             return Err(err);
                                         }
                                     }
                                 }
                                 CbltError::DirectiveNotMatched => {}
                                 err => {
-                                    log_request_response(
-                                        &request,
-                                        StatusCode::INTERNAL_SERVER_ERROR,
-                                    );
+                                    log_request(StatusCode::INTERNAL_SERVER_ERROR);
                                     return Err(err);
                                 }
                             },
@@ -144,7 +139,7 @@ where
                         .await
                         {
                             Ok(status) => {
-                                log_request_response(&request, status);
+                                log_request(status);
                                 return Ok(());
                             }
                             Err(err) => match err {
@@ -156,23 +151,17 @@ where
                                     let response = error_response(status_code);
                                     match send_response(socket, response?).await {
                                         Ok(()) => {
-                                            log_request_response(&request, status_code);
+                                            log_request(status_code);
                                             return Ok(());
                                         }
                                         Err(err) => {
-                                            log_request_response(
-                                                &request,
-                                                StatusCode::INTERNAL_SERVER_ERROR,
-                                            );
+                                            log_request(StatusCode::INTERNAL_SERVER_ERROR);
                                             return Err(err);
                                         }
                                     }
                                 }
                                 other => {
-                                    log_request_response(
-                                        &request,
-                                        StatusCode::INTERNAL_SERVER_ERROR,
-                                    );
+                                    log_request(StatusCode::INTERNAL_SERVER_ERROR);
                                     return Err(other);
                                 }
                             },
@@ -187,11 +176,11 @@ where
                                                      //
                         match send_response(socket, response).await {
                             Ok(_) => {
-                                log_request_response(&request, StatusCode::FOUND);
+                                log_request(StatusCode::FOUND);
                                 return Ok(());
                             }
                             Err(err) => {
-                                log_request_response(&request, StatusCode::INTERNAL_SERVER_ERROR);
+                                log_request(StatusCode::INTERNAL_SERVER_ERROR);
                                 return Err(err);
                             }
                         }
@@ -220,14 +209,11 @@ where
                             Some(_) => debug!("Cookie found: {}", cookiename),
                             None => match send_response(socket, response).await {
                                 Ok(_) => {
-                                    log_request_response(&request, StatusCode::FOUND);
+                                    log_request(StatusCode::FOUND);
                                     return Ok(());
                                 }
                                 Err(err) => {
-                                    log_request_response(
-                                        &request,
-                                        StatusCode::INTERNAL_SERVER_ERROR,
-                                    );
+                                    log_request(StatusCode::INTERNAL_SERVER_ERROR);
                                     return Err(err);
                                 }
                             },
@@ -240,10 +226,10 @@ where
 
             let response = error_response(StatusCode::NOT_FOUND);
             if let Err(err) = send_response(socket, response?).await {
-                log_request_response(&request, StatusCode::INTERNAL_SERVER_ERROR);
+                log_request(StatusCode::INTERNAL_SERVER_ERROR);
                 return Err(err);
             }
-            log_request_response(&request, StatusCode::NOT_FOUND);
+            log_request(StatusCode::NOT_FOUND);
             Ok(())
         }
     }
