@@ -115,12 +115,11 @@ where
                 let value = header.value;
                 builder = builder.header(name, value);
 
-                if name.eq_ignore_ascii_case("Content-Length") {
-                    if let Ok(s) = std::str::from_utf8(value) {
-                        if let Ok(len) = s.trim().parse::<usize>() {
-                            content_length_opt = Some(len);
-                        }
-                    }
+                if name.eq_ignore_ascii_case("Content-Length")
+                    && let Ok(s) = std::str::from_utf8(value)
+                    && let Ok(len) = s.trim().parse::<usize>()
+                {
+                    content_length_opt = Some(len);
                 }
             }
 

@@ -160,7 +160,7 @@ impl ServerWorker {
 
 #[cfg_attr(feature = "trace", instrument(level = "trace", skip_all))]
 async fn init_proxy_states(
-    directives: &Vec<Directive>,
+    directives: &[Directive],
 ) -> Result<HashMap<String, ReverseProxyState>, CbltError> {
     let mut reverse_proxy_states: HashMap<String, ReverseProxyState> = HashMap::new(); // (pattern -> ReverseProxyState)
     for directive in directives {

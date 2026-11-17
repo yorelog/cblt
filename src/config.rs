@@ -279,174 +279,168 @@ pub async fn load_servers_from_docker(_args: Arc<Args>) -> Result<HashMap<u16, S
     let mut hosts: HashMap<String, Vec<Directive>> = HashMap::new();
     for service in services {
         // Process each service
-        if let Some(spec) = service.spec {
-            if let Some(labels) = spec.labels {
-                // Check if labels have keys starting with "cblt."
-                if labels.keys().any(|k| k.starts_with("cblt.")) {
-                    // Get service name
-                    let service_name = spec.name.ok_or(CbltError::ServiceNameNotFound)?;
-                    let mut destinations: Vec<String> = Vec::new();
-                    let containers = docker
-                        .list_containers(Some(ListContainersOptions {
-                            all: false,
-                            filters: Some(HashMap::new()),
-                            ..Default::default()
-                        }))
-                        .await?;
-                    for container in &containers {
-                        if let Some(names) = &container.names {
-                            match names
-                                .iter()
-                                .find(|name| name.starts_with(&format!("/{}.", service_name)))
-                            {
-                                None => {}
-                                Some(name_all) => {
-                                    let container_name = name_all.replace("/", "");
-                                    debug!("{container_name}");
-                                    destinations.push(container_name);
-                                }
-                            }
-                        } else {
-                            return Err(CbltError::ContainerNameNotFound);
-                        }
-                    }
-
-                    // Process the labels
-                    let hosts_label =
-                        labels
-                            .get("cblt.hosts")
-                            .ok_or_else(|| CbltError::LabelNotFound {
-                                details: "cblt.hosts".to_string(),
-                            })?;
-                    let path_label =
-                        labels
-                            .get("cblt.path")
-                            .ok_or_else(|| CbltError::LabelNotFound {
-                                details: "cblt.path".to_string(),
-                            })?;
-                    let port_label =
-                        labels
-                            .get("cblt.port")
-                            .ok_or_else(|| CbltError::LabelNotFound {
-                                details: "cblt.port".to_string(),
-                            })?;
-
-                    let hosts_list: Vec<&str> = hosts_label.split(',').map(|s| s.trim()).collect();
-                    let path = path_label.clone();
-                    let port =
-                        port_label
-                            .parse::<u16>()
-                            .map_err(|_| CbltError::InvalidLabelFormat {
-                                details: "cblt.port".to_string(),
-                            })?;
-
-                    // Collect secrets per host
-                    let secrets_label = labels.get("cblt.secrets");
-                    let secrets_map = if let Some(secrets_label) = secrets_label {
-                        let mut map = HashMap::new();
-                        let secrets_entries: Vec<&str> =
-                            secrets_label.split(',').map(|s| s.trim()).collect();
-                        for entry in secrets_entries {
-                            let parts: Vec<&str> = entry.split_whitespace().collect();
-                            if parts.len() == 3 {
-                                let host = parts[0];
-                                let key = parts[1].to_string();
-                                let cert = parts[2].to_string();
-                                map.insert(host.to_string(), (key, cert));
-                            } else {
-                                return Err(CbltError::InvalidLabelFormat {
-                                    details: "cblt.secrets".to_string(),
-                                });
-                            }
-                        }
-                        map
-                    } else {
-                        HashMap::new()
-                    };
-
-                    // Load balancing options
-                    let lb_policy_label = labels.get("cblt.lb_policy");
-                    let lb_interval_label = labels.get("cblt.lb_interval");
-                    let lb_timeout_label = labels.get("cblt.lb_timeout");
-                    let lb_retries_label = labels.get("cblt.lb_retries");
-
-                    let lb_policy = if let Some(policy_str) = lb_policy_label {
-                        match policy_str.as_str() {
-                            "round_robin" => Some(LoadBalancePolicy::RoundRobin),
-                            "ip_hash" => Some(LoadBalancePolicy::IPHash),
-                            _ => {
-                                return Err(CbltError::KdlParseError {
-                                    details: format!("Unknown lb_policy '{}'", policy_str),
-                                });
-                            }
-                        }
-                    } else {
-                        None
-                    };
-
-                    let lb_interval = if let Some(interval_str) = lb_interval_label {
-                        humantime::parse_duration(interval_str)
-                            .map_err(|_| CbltError::InvalidLabelFormat {
-                                details: "cblt.lb_interval".to_string(),
-                            })?
-                            .as_secs()
-                    } else {
-                        10 // Default value
-                    };
-
-                    let lb_timeout = if let Some(timeout_str) = lb_timeout_label {
-                        humantime::parse_duration(timeout_str)
-                            .map_err(|_| CbltError::InvalidLabelFormat {
-                                details: "cblt.lb_timeout".to_string(),
-                            })?
-                            .as_secs()
-                    } else {
-                        1 // Default value
-                    };
-
-                    let lb_retries = if let Some(retries_str) = lb_retries_label {
-                        retries_str
-                            .parse::<u64>()
-                            .map_err(|_| CbltError::InvalidLabelFormat {
-                                details: "cblt.lb_retries".to_string(),
-                            })?
-                    } else {
-                        2 // Default value
-                    };
-
-                    let options = ReverseProxyOptions {
-                        lb_retries,
-                        lb_interval,
-                        lb_timeout,
-                        lb_policy,
-                    };
-
-                    // Build the ReverseProxy directive
-                    let destinations = destinations
+        if let Some(spec) = service.spec
+            && let Some(labels) = spec.labels
+            && labels.keys().any(|key| key.starts_with("cblt."))
+        {
+            // Get service name
+            let service_name = spec.name.ok_or(CbltError::ServiceNameNotFound)?;
+            let mut destinations: Vec<String> = Vec::new();
+            let containers = docker
+                .list_containers(Some(ListContainersOptions {
+                    all: false,
+                    filters: Some(HashMap::new()),
+                    ..Default::default()
+                }))
+                .await?;
+            for container in &containers {
+                if let Some(names) = &container.names {
+                    match names
                         .iter()
-                        .map(|s| format!("{}:{}", s, port))
-                        .collect();
-                    let reverse_proxy_directive = Directive::ReverseProxy {
-                        pattern: path.clone(),
-                        destinations,
-                        options,
-                    };
-
-                    // For each host, add the directives
-                    for host in hosts_list {
-                        let host_directives = hosts.entry(host.to_string()).or_default();
-                        host_directives.push(reverse_proxy_directive.clone());
-
-                        // If there is a secret for this host, add the TLS directive
-                        if let Some((key, cert)) = secrets_map.get(host) {
-                            let key_data = Some(key.into());
-                            let cert_data = Some(cert.into());
-                            host_directives.push(Directive::TlS {
-                                key: key_data.ok_or(CbltError::SecretDataNotFound)?,
-                                cert: cert_data.ok_or(CbltError::SecretDataNotFound)?,
-                            });
+                        .find(|name| name.starts_with(&format!("/{}.", service_name)))
+                    {
+                        None => {}
+                        Some(name_all) => {
+                            let container_name = name_all.replace("/", "");
+                            debug!("{container_name}");
+                            destinations.push(container_name);
                         }
                     }
+                } else {
+                    return Err(CbltError::ContainerNameNotFound);
+                }
+            }
+
+            // Process the labels
+            let hosts_label = labels
+                .get("cblt.hosts")
+                .ok_or_else(|| CbltError::LabelNotFound {
+                    details: "cblt.hosts".to_string(),
+                })?;
+            let path_label = labels
+                .get("cblt.path")
+                .ok_or_else(|| CbltError::LabelNotFound {
+                    details: "cblt.path".to_string(),
+                })?;
+            let port_label = labels
+                .get("cblt.port")
+                .ok_or_else(|| CbltError::LabelNotFound {
+                    details: "cblt.port".to_string(),
+                })?;
+
+            let hosts_list: Vec<&str> = hosts_label.split(',').map(|s| s.trim()).collect();
+            let path = path_label.clone();
+            let port = port_label
+                .parse::<u16>()
+                .map_err(|_| CbltError::InvalidLabelFormat {
+                    details: "cblt.port".to_string(),
+                })?;
+
+            // Collect secrets per host
+            let secrets_label = labels.get("cblt.secrets");
+            let secrets_map = if let Some(secrets_label) = secrets_label {
+                let mut map = HashMap::new();
+                let secrets_entries: Vec<&str> =
+                    secrets_label.split(',').map(|s| s.trim()).collect();
+                for entry in secrets_entries {
+                    let parts: Vec<&str> = entry.split_whitespace().collect();
+                    if parts.len() == 3 {
+                        let host = parts[0];
+                        let key = parts[1].to_string();
+                        let cert = parts[2].to_string();
+                        map.insert(host.to_string(), (key, cert));
+                    } else {
+                        return Err(CbltError::InvalidLabelFormat {
+                            details: "cblt.secrets".to_string(),
+                        });
+                    }
+                }
+                map
+            } else {
+                HashMap::new()
+            };
+
+            // Load balancing options
+            let lb_policy_label = labels.get("cblt.lb_policy");
+            let lb_interval_label = labels.get("cblt.lb_interval");
+            let lb_timeout_label = labels.get("cblt.lb_timeout");
+            let lb_retries_label = labels.get("cblt.lb_retries");
+
+            let lb_policy = if let Some(policy_str) = lb_policy_label {
+                match policy_str.as_str() {
+                    "round_robin" => Some(LoadBalancePolicy::RoundRobin),
+                    "ip_hash" => Some(LoadBalancePolicy::IPHash),
+                    _ => {
+                        return Err(CbltError::KdlParseError {
+                            details: format!("Unknown lb_policy '{}'", policy_str),
+                        });
+                    }
+                }
+            } else {
+                None
+            };
+
+            let lb_interval = if let Some(interval_str) = lb_interval_label {
+                humantime::parse_duration(interval_str)
+                    .map_err(|_| CbltError::InvalidLabelFormat {
+                        details: "cblt.lb_interval".to_string(),
+                    })?
+                    .as_secs()
+            } else {
+                10 // Default value
+            };
+
+            let lb_timeout = if let Some(timeout_str) = lb_timeout_label {
+                humantime::parse_duration(timeout_str)
+                    .map_err(|_| CbltError::InvalidLabelFormat {
+                        details: "cblt.lb_timeout".to_string(),
+                    })?
+                    .as_secs()
+            } else {
+                1 // Default value
+            };
+
+            let lb_retries = if let Some(retries_str) = lb_retries_label {
+                retries_str
+                    .parse::<u64>()
+                    .map_err(|_| CbltError::InvalidLabelFormat {
+                        details: "cblt.lb_retries".to_string(),
+                    })?
+            } else {
+                2 // Default value
+            };
+
+            let options = ReverseProxyOptions {
+                lb_retries,
+                lb_interval,
+                lb_timeout,
+                lb_policy,
+            };
+
+            // Build the ReverseProxy directive
+            let destinations = destinations
+                .iter()
+                .map(|s| format!("{}:{}", s, port))
+                .collect();
+            let reverse_proxy_directive = Directive::ReverseProxy {
+                pattern: path.clone(),
+                destinations,
+                options,
+            };
+
+            // For each host, add the directives
+            for host in hosts_list {
+                let host_directives = hosts.entry(host.to_string()).or_default();
+                host_directives.push(reverse_proxy_directive.clone());
+
+                // If there is a secret for this host, add the TLS directive
+                if let Some((key, cert)) = secrets_map.get(host) {
+                    let key_data = Some(key.into());
+                    let cert_data = Some(cert.into());
+                    host_directives.push(Directive::TlS {
+                        key: key_data.ok_or(CbltError::SecretDataNotFound)?,
+                        cert: cert_data.ok_or(CbltError::SecretDataNotFound)?,
+                    });
                 }
             }
         }

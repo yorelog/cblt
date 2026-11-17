@@ -25,7 +25,8 @@ where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
 {
     let mut buffer = BytesMut::with_capacity(BUF_SIZE);
-    match socket_to_request(socket, &mut buffer).await {
+    let request_result = socket_to_request(socket, &mut buffer).await;
+    match request_result {
         Err(err) => {
             let response = error_response(StatusCode::BAD_REQUEST);
             let ret = send_response(socket, response?).await;
@@ -49,20 +50,17 @@ where
             // find host starting with "*"
             let cfg_opt = settings.hosts.iter().find(|(k, _)| k.starts_with("*"));
             let host_config = match cfg_opt {
-                None => {
-                    let host_config = match settings.hosts.get(host) {
-                        Some(cfg) => cfg,
-                        None => {
-                            let response = error_response(StatusCode::FORBIDDEN);
-                            let _ = send_response(socket, response?).await;
-                            return Err(CbltError::ResponseError {
-                                details: "Forbidden".to_string(),
-                                status_code: StatusCode::FORBIDDEN,
-                            });
-                        }
-                    };
-                    host_config
-                }
+                None => match settings.hosts.get(host) {
+                    Some(cfg) => cfg,
+                    None => {
+                        let response = error_response(StatusCode::FORBIDDEN);
+                        let _ = send_response(socket, response?).await;
+                        return Err(CbltError::ResponseError {
+                            details: "Forbidden".to_string(),
+                            status_code: StatusCode::FORBIDDEN,
+                        });
+                    }
+                },
                 Some((_, cfg)) => cfg,
             };
 

@@ -360,7 +360,6 @@ impl ReverseProxyState {
     }
 
     #[cfg_attr(feature = "trace", instrument(level = "trace", skip_all))]
-    #[cfg_attr(feature = "trace", instrument(level = "trace", skip_all))]
     pub async fn get_next_backend(&self, addr: SocketAddr) -> Result<LiveBackend, CbltError> {
         // Implement load balancing logic here
         match &self.lb_policy {
