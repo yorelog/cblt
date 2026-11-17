@@ -460,6 +460,7 @@ pub async fn load_servers_from_docker(_args: Arc<Args>) -> Result<HashMap<u16, S
 #[cfg(test)]
 mod tests {
     use crate::config::build_config;
+    use crate::error::CbltError;
     use kdl::KdlDocument;
     use std::error::Error;
 
@@ -519,9 +520,9 @@ example.com {
         let cblt_file = r#"
 "example.com" {
     reverse_proxy "/api/*" "backend1:8080" "backend2:8080" {
-        health_uri "/health"
-        health_interval "10s"
-        health_timeout "2s"
+        lb_interval "10s"
+        lb_timeout "2s"
+        lb_retries "3"
         lb_policy "round_robin"
     }
 }
@@ -534,7 +535,7 @@ example.com {
     }
 
     #[test]
-    fn test_reverse_proxy_with_cookie_lb_policy() -> Result<(), Box<dyn Error>> {
+    fn test_unknown_cookie_lb_policy_is_rejected() -> Result<(), Box<dyn Error>> {
         let cblt_file = r#"
 "example.com" {
     reverse_proxy "/api/*" "backend1:8080" "backend2:8080" {
@@ -547,8 +548,10 @@ example.com {
 }
             "#;
         let doc: KdlDocument = cblt_file.parse()?;
-        let config = build_config(&doc)?;
-        println!("{:#?}", config);
+        assert!(matches!(
+            build_config(&doc),
+            Err(CbltError::KdlParseError { .. })
+        ));
 
         Ok(())
     }

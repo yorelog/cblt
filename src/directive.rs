@@ -85,13 +85,9 @@ where
                     Directive::FileServer => {
                         #[cfg(debug_assertions)]
                         debug!("File server with fallback: {:?}", fallback_file);
-                        let ret = file_server::file_directive(
-                            root_path.as_deref(),
-                            fallback_file,
-                            &request,
-                            socket,
-                        )
-                        .await;
+                        let ret =
+                            file_server::file_directive(root_path, fallback_file, &request, socket)
+                                .await;
                         match ret {
                             Ok(_) => {
                                 log_request_response(&request, StatusCode::OK);

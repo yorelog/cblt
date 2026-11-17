@@ -1,29 +1,49 @@
 use crate::error::CbltError;
 use async_compression::tokio::write::GzipEncoder;
 use bytes::BytesMut;
+use http::header::{ACCEPT_ENCODING, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, VARY};
 use http::{Request, Response, StatusCode};
-use log::info;
 #[cfg(debug_assertions)]
 use log::debug;
-use std::fmt::Debug;
+use log::info;
 use std::path::PathBuf;
 use std::pin;
 use tokio::fs::File;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 #[cfg(feature = "trace")]
 use tracing::instrument;
 
 #[cfg_attr(feature = "trace", instrument(level = "trace", skip_all))]
 pub async fn send_response_file<S>(
     mut socket: S,
-    response: Response<impl AsyncRead + Debug + AsyncWrite>,
+    response: Response<impl AsyncRead>,
     req: &Request<BytesMut>,
 ) -> Result<(), CbltError>
 where
     S: AsyncWriteExt + Unpin,
 {
-    let (parts, mut b) = response.into_parts();
-    let mut body = pin::pin!(b);
+    let (mut parts, body) = response.into_parts();
+    let can_compress =
+        parts.status == StatusCode::OK && !parts.headers.contains_key(CONTENT_ENCODING);
+    let gzip_supported = can_compress && gzip_support_detect(req);
+
+    if can_compress {
+        parts
+            .headers
+            .append(VARY, http::HeaderValue::from_static("Accept-Encoding"));
+    }
+
+    if gzip_supported {
+        parts.headers.remove(CONTENT_LENGTH);
+        parts
+            .headers
+            .insert(CONTENT_ENCODING, http::HeaderValue::from_static("gzip"));
+        parts
+            .headers
+            .insert(CONNECTION, http::HeaderValue::from_static("close"));
+    }
+
+    let mut body = pin::pin!(body);
 
     // Write status line without allocation
     socket.write_all(b"HTTP/1.1 ").await?;
@@ -35,12 +55,6 @@ where
         .write_all(parts.status.canonical_reason().unwrap_or("").as_bytes())
         .await?;
     socket.write_all(b"\r\n").await?;
-    let gzip_supported = gzip_support_detect(req);
-    if gzip_supported {
-        // socket.write_all(b"Content-Encoding: gzip").await?;
-        // socket.write_all(b"\r\n").await?;
-    }
-
     // Write headers without allocation
     for (key, value) in parts.headers.iter() {
         socket.write_all(key.as_str().as_bytes()).await?;
@@ -58,9 +72,9 @@ where
     if gzip_supported {
         #[cfg(debug_assertions)]
         debug!("Gzip supported");
-        let gzip_stream = GzipEncoder::new(body);
-        let mut gzip_reader = tokio::io::BufReader::new(gzip_stream);
-        tokio::io::copy(&mut gzip_reader, &mut socket).await?;
+        let mut gzip_encoder = GzipEncoder::new(&mut socket);
+        tokio::io::copy(&mut body, &mut gzip_encoder).await?;
+        gzip_encoder.shutdown().await?;
     } else {
         tokio::io::copy(&mut body, &mut socket).await?;
     }
@@ -77,14 +91,22 @@ pub async fn ranged_file_response(
     file_path: &PathBuf,
     file_size: u64,
     range: (u64, u64),
-) -> Result<Response<File>, CbltError> {
+) -> Result<Response<tokio::io::Take<File>>, CbltError> {
     let (start, end) = range;
-    let content_length = end - start + 1;
+    let content_length = end
+        .checked_sub(start)
+        .and_then(|length| length.checked_add(1))
+        .filter(|_| end < file_size)
+        .ok_or(CbltError::ResponseError {
+            details: "Invalid byte range".to_string(),
+            status_code: StatusCode::RANGE_NOT_SATISFIABLE,
+        })?;
 
     // Seek to the start position
     let mut file = file;
     use tokio::io::AsyncSeekExt;
     file.seek(std::io::SeekFrom::Start(start)).await?;
+    let file = file.take(content_length);
 
     let mut content_range: heapless::String<200> = heapless::String::new();
     content_range
@@ -119,14 +141,56 @@ pub async fn ranged_file_response(
 
 #[cfg_attr(feature = "trace", instrument(level = "trace", skip_all))]
 fn gzip_support_detect(req_opt: &Request<BytesMut>) -> bool {
-    let accept_encoding = req_opt
-        .headers()
-        .get(http::header::ACCEPT_ENCODING)
-        .and_then(|value| value.to_str().ok());
+    let mut gzip_quality = None;
+    let mut wildcard_quality = None;
 
-    accept_encoding
-        .map(|encodings| encodings.contains("gzip"))
+    for header in req_opt
+        .headers()
+        .get_all(ACCEPT_ENCODING)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+    {
+        for encoding in header.split(',') {
+            let encoding = encoding.trim();
+            let (coding, parameters) = encoding.split_once(';').unwrap_or((encoding, ""));
+            let Some(quality) = encoding_quality(parameters) else {
+                continue;
+            };
+
+            if coding.trim().eq_ignore_ascii_case("gzip") {
+                gzip_quality = Some(quality);
+            } else if coding.trim() == "*" {
+                wildcard_quality = Some(quality);
+            }
+        }
+    }
+
+    gzip_quality
+        .or(wildcard_quality)
+        .map(|quality| quality > 0.0)
         .unwrap_or(false)
+}
+
+fn encoding_quality(parameters: &str) -> Option<f32> {
+    let mut quality = None;
+
+    for parameter in parameters
+        .split(';')
+        .filter(|value| !value.trim().is_empty())
+    {
+        let (name, value) = parameter.trim().split_once('=')?;
+        if !name.trim().eq_ignore_ascii_case("q") || quality.is_some() {
+            return None;
+        }
+
+        let parsed = value.trim().parse::<f32>().ok()?;
+        if !parsed.is_finite() || !(0.0..=1.0).contains(&parsed) {
+            return None;
+        }
+        quality = Some(parsed);
+    }
+
+    Some(quality.unwrap_or(1.0))
 }
 
 #[cfg_attr(feature = "trace", instrument(level = "trace", skip_all))]
@@ -197,4 +261,116 @@ pub fn error_response(status: StatusCode) -> Result<Response<BytesMut>, CbltErro
     };
     let bytes = BytesMut::from(msg);
     Ok(Response::builder().status(status).body(bytes)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    fn request_with_encoding(encoding: &str) -> Request<BytesMut> {
+        Request::builder()
+            .header(ACCEPT_ENCODING, encoding)
+            .body(BytesMut::new())
+            .expect("valid test request")
+    }
+
+    #[test]
+    fn gzip_negotiation_respects_tokens_and_quality() {
+        for (encoding, expected) in [
+            ("gzip", true),
+            ("br, GZIP; q=0.5", true),
+            ("gzip;q=0", false),
+            ("gzip;q=1.1", false),
+            ("xgzip", false),
+            ("*", true),
+            ("br", false),
+        ] {
+            assert_eq!(
+                gzip_support_detect(&request_with_encoding(encoding)),
+                expected,
+                "unexpected gzip negotiation for {encoding:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn gzip_response_has_consistent_headers_and_body(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let payload = b"response body".to_vec();
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_LENGTH, payload.len())
+            .body(std::io::Cursor::new(payload))?;
+        let request = request_with_encoding("gzip");
+        let (mut client, mut server) = tokio::io::duplex(4096);
+
+        send_response_file(&mut server, response, &request).await?;
+        drop(server);
+
+        let mut response_bytes = Vec::new();
+        client.read_to_end(&mut response_bytes).await?;
+        let header_end = response_bytes
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .expect("response headers are terminated");
+        let headers = std::str::from_utf8(&response_bytes[..header_end])?;
+        let body = &response_bytes[header_end + 4..];
+
+        assert!(headers.contains("content-encoding: gzip"));
+        assert!(headers.contains("connection: close"));
+        assert!(headers.contains("vary: Accept-Encoding"));
+        assert!(!headers.contains("content-length:"));
+        assert!(body.starts_with(&[0x1f, 0x8b]));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn partial_content_is_not_compressed() -> Result<(), Box<dyn std::error::Error>> {
+        let payload = b"partial".to_vec();
+        let response = Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(CONTENT_LENGTH, payload.len())
+            .body(std::io::Cursor::new(payload))?;
+        let request = request_with_encoding("gzip");
+        let (mut client, mut server) = tokio::io::duplex(4096);
+
+        send_response_file(&mut server, response, &request).await?;
+        drop(server);
+
+        let mut response_bytes = Vec::new();
+        client.read_to_end(&mut response_bytes).await?;
+        let header_end = response_bytes
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .expect("response headers are terminated");
+        let headers = std::str::from_utf8(&response_bytes[..header_end])?;
+
+        assert!(headers.contains("content-length: 7"));
+        assert!(!headers.contains("content-encoding: gzip"));
+        assert_eq!(&response_bytes[header_end + 4..], b"partial");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ranged_response_reads_only_the_requested_bytes(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/response.rs");
+        let contents = tokio::fs::read(&path).await?;
+        let file = File::open(&path).await?;
+        let response = ranged_file_response(file, &path, contents.len() as u64, (2, 7)).await?;
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_LENGTH)
+                .and_then(|value| value.to_str().ok()),
+            Some("6")
+        );
+        let mut body = response.into_body();
+        let mut bytes = Vec::new();
+
+        body.read_to_end(&mut bytes).await?;
+        assert_eq!(bytes, contents[2..=7]);
+        Ok(())
+    }
 }

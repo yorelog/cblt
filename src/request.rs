@@ -64,12 +64,14 @@ where
     })
 }
 
+pub type ParsedRequest = (Request<BytesMut>, Option<usize>);
+
 #[cfg_attr(feature = "trace", instrument(level = "trace", skip_all))]
 pub async fn parse_request_headers<S>(
     header_len: usize,
     buf: &mut BytesMut,
     socket: &mut S,
-) -> Result<Option<(Request<BytesMut>, Option<usize>)>, CbltError>
+) -> Result<Option<ParsedRequest>, CbltError>
 where
     S: AsyncReadExt + AsyncWriteExt + Unpin,
 {
@@ -174,7 +176,7 @@ pub fn parse_range_header(range_header: &str, file_size: u64) -> Result<(u64, u6
     let (start, end) = match (start, end) {
         (Some(s), Some(e)) if s <= e && e < file_size => (s, e),
         (Some(s), None) if s < file_size => (s, file_size - 1),
-        (None, Some(e)) if e != 0 => (file_size - e, file_size - 1),
+        (None, Some(e)) if e != 0 && file_size > 0 => (file_size.saturating_sub(e), file_size - 1),
         _ => {
             return Err(CbltError::ResponseError {
                 details: "Invalid Range header values".to_string(),
@@ -184,4 +186,26 @@ pub fn parse_range_header(range_header: &str, file_size: u64) -> Result<(u64, u6
     };
 
     Ok((start, end))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn suffix_range_larger_than_file_returns_the_whole_file() {
+        assert_eq!(parse_range_header("bytes=-10", 5).unwrap(), (0, 4));
+    }
+
+    #[test]
+    fn suffix_range_for_empty_file_is_rejected() {
+        let error = parse_range_header("bytes=-1", 0).unwrap_err();
+        assert!(matches!(
+            error,
+            CbltError::ResponseError {
+                status_code: StatusCode::RANGE_NOT_SATISFIABLE,
+                ..
+            }
+        ));
+    }
 }
