@@ -1,4 +1,4 @@
-use crate::{matches_pattern, CbltError};
+use crate::{CbltError, matches_pattern};
 use bytes::BytesMut;
 use http::{Request, StatusCode};
 #[cfg(debug_assertions)]

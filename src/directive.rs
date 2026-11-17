@@ -1,6 +1,6 @@
 use crate::config::Directive;
 use crate::error::CbltError;
-use crate::request::{socket_to_request, BUF_SIZE};
+use crate::request::{BUF_SIZE, socket_to_request};
 use crate::response::{error_response, log_request_response, send_response};
 use crate::server::ServerSettings;
 use crate::{file_server, matches_pattern, reverse_proxy};
@@ -173,7 +173,7 @@ where
                             .status(StatusCode::FOUND)
                             .header("Location", &dest)
                             .body(BytesMut::new())?; // Empty body for redirects?
-                                                     //
+                        //
                         match send_response(socket, response).await {
                             Ok(_) => {
                                 log_request(StatusCode::FOUND);
@@ -194,7 +194,7 @@ where
                             .status(StatusCode::FOUND)
                             .header("Location", &dest)
                             .body(BytesMut::new())?; // Empty body for redirects?
-                                                     //
+                        //
                         let cookies = match request.headers().get("Cookie") {
                             Some(cookies) => cookies.to_str().unwrap_or(""),
                             None => "",

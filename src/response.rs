@@ -209,7 +209,7 @@ pub fn log_request_response(
         .map_or("-", |v| v.to_str().unwrap_or("-"));
 
     info!(
-        "Request: {} {} {} {} remote_addr={}",
+        "Request: {} {} {} {} {}",
         method,
         uri,
         host_header,
@@ -301,8 +301,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gzip_response_has_consistent_headers_and_body(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn gzip_response_has_consistent_headers_and_body()
+    -> Result<(), Box<dyn std::error::Error>> {
         let payload = b"response body".to_vec();
         let response = Response::builder()
             .status(StatusCode::OK)
@@ -359,8 +359,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ranged_response_reads_only_the_requested_bytes(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn ranged_response_reads_only_the_requested_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/response.rs");
         let contents = tokio::fs::read(&path).await?;
         let file = File::open(&path).await?;

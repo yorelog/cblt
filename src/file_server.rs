@@ -53,7 +53,7 @@ where
                                             err
                                         ),
                                         status_code: StatusCode::NOT_FOUND,
-                                    })
+                                    });
                                 }
                             }
                         } else {

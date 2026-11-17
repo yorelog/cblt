@@ -1,21 +1,21 @@
-use crate::config::{load_servers_from_config, load_servers_from_docker, Directive};
+use crate::config::{Directive, load_servers_from_config, load_servers_from_docker};
 use crate::error::CbltError;
 use crate::server::{Server, ServerWorker};
 use clap::{Parser, ValueEnum};
 #[cfg(debug_assertions)]
 use log::debug;
 use log::{error, info};
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::path::Path;
 use std::str;
 use std::sync::Arc;
 use tokio::runtime::Builder;
+use tracing::Level;
 #[cfg(feature = "trace")]
 use tracing::instrument;
-use tracing::Level;
-use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::fmt::format::FmtSpan;
 mod config;
 mod directive;
 mod error;

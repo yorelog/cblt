@@ -1,6 +1,6 @@
 use crate::error::CbltError;
 use crate::server::Server;
-use crate::{build_servers, Args};
+use crate::{Args, build_servers};
 use bollard::query_parameters::{ListContainersOptions, ListServicesOptions};
 use kdl::{KdlDocument, KdlNode};
 use log::debug;
